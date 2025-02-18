@@ -1,0 +1,5 @@
+python-dotenv
+pyupbit
+grpcio==1.67.1
+requests
+google-generativeai
