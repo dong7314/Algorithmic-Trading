@@ -7,3 +7,5 @@ ta
 selenium
 webdriver_manager
 Pillow
+streamlit
+plotly
