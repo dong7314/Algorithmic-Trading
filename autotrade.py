@@ -31,6 +31,8 @@ gemini_key = os.getenv('GEMINI_KEY')
 getmini_model = os.getenv('GEMINI_MODEL')
 upbit_access_key = os.getenv("UPBIT_ACCESS_KEY")
 upbit_secret_key = os.getenv("UPBIT_SECRET_KEY")
+naver_client_key = os.getenv('NAVER_CLIENT_ID')
+naver_client_secret = os.getenv('NAVER_CLIENT_SECRET')
 serpapi_key = os.getenv("SERPAPI_API_KEY")
 
 def init_db():
@@ -98,7 +100,7 @@ def generate_reflection(trades_df, current_market_data):
     
     Limit your response to 250 words or less.(Strictly Follow!)"""
 
-    print(f"### AI Reflection Start ###")
+    print(f"### AI 피드백 시작 ###")
     # AI 응답 받기
     response = model.generate_content([
         {"role": "user", "parts": [{"text": system_prompt}]}, 
@@ -107,7 +109,7 @@ def generate_reflection(trades_df, current_market_data):
     response_json = response.to_dict()
     # JSON 데이터 추출
     result = response_json["candidates"][0]["content"]["parts"][0]["text"]
-    print(f"### AI Reflection: {result} ###")
+    print(f"### AI 피드백: {result} ###")
     
     return result
 
@@ -143,7 +145,7 @@ def get_fear_and_greed_index():
         data = response.json()
         return data['data'][0]
     else:
-        print(f"Failed to fetch Fear and Greed Index. Status code: {response.status_code}")
+        print(f"공포와 탐욕 지수를 가져오는 도중 오류 발생: {response.status_code}")
         return None
 
 def get_bitcoin_news():
@@ -169,8 +171,24 @@ def get_bitcoin_news():
         
         return headlines[:5]  # 최신 5개의 뉴스 헤드라인만 반환
     except requests.RequestException as e:
-        print(f"Error fetching news: {e}")
+        print(f"구글 뉴스를 가져오는 중 오류 발생: {e}")
         return []
+    
+def get_bitcoin_naver_news():
+    naver_request_url = 'https://openapi.naver.com/v1/search/news.json?query=비트코인&display=50&start=1&sort=date'
+    headers = {
+        "Accept": "application/json",
+        "X-Naver-Client-Id": naver_client_key,
+        "X-Naver-Client-Secret": naver_client_secret
+    }
+
+    news_response = requests.get(naver_request_url, headers=headers)
+    news = []
+    if news_response.status_code == 200:
+        news = news_response.json()["items"]
+    else:
+        print(f"네이버 뉴스를 가져오는 중 오류 발생: {news_response.status_code}")
+    return news
 
 def setup_chrome_options():
     chrome_options = Options()
@@ -379,7 +397,7 @@ def prepare_image_for_gemini(base64_image_str, image_path):
 
         return {"mime_type": "image/png", "data": image_bytes}
     except Exception as e:
-        print(f"⚠️ 이미지 처리 중 오류 발생: {e}")
+        print(f"이미지 처리 중 오류 발생: {e}")
         return None
     
 def get_ai_response_to_json(response):
@@ -396,15 +414,15 @@ init_db()
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+google_news_headlines = []
 
-def ai_trading():
+def ai_trading(current_hour):
     # Upbit 객체 생성
     upbit = pyupbit.Upbit(upbit_access_key, upbit_secret_key)
 
     # 1. 현재 투자 상태 조회
     all_balances = upbit.get_balances()
     filtered_balances = [balance for balance in all_balances if balance['currency'] in ['BTC', 'KRW']]
-    print(filtered_balances)
     
     # 2. 오더북(호가 데이터) 조회
     orderbook = pyupbit.get_orderbook("KRW-BTC")
@@ -429,8 +447,11 @@ def ai_trading():
     fear_greed_index = get_fear_and_greed_index()
 
     # 5. 뉴스 헤드라인 가져오기
-    # news_headlines = get_bitcoin_news()
-    news_headlines = []
+    # 8시간 마다 google news 최신화
+    # 매 시간 마다 naver news 최신화
+    if current_hour % 8 == 0:
+        google_news_headlines = get_bitcoin_news()
+    naver_news_headlines = get_bitcoin_naver_news()
 
     # 데이터베이스 연결
     conn = get_db_connection()
@@ -441,7 +462,8 @@ def ai_trading():
     # 현재 시장 데이터 수집 (기존 코드에서 가져온 데이터 사용)
     current_market_data = {
         "fear_greed_index": fear_greed_index,
-        "news_headlines": news_headlines,
+        "google_news_headlines": google_news_headlines,
+        "naver_news_headlines": naver_news_headlines,
         "orderbook": orderbook,
         "daily_ohlcv": df_daily.to_dict(),
         "4_hourly_ohlcv": df_4hourly.to_dict(),
@@ -547,10 +569,11 @@ def ai_trading():
     Daily OHLCV with indicators (30 days): {df_daily.to_json()}
     4-Hourly OHLCV with indicators (24 counts): {df_4hourly.to_json()}
     Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-    Recent news headlines from Google: {json.dumps(news_headlines)}
+    Recent news headlines from Google: {json.dumps(google_news_headlines)}
+    Recent news headlines from Naver: {json.dumps(naver_news_headlines)}
     Fear and Greed Index: {json.dumps(fear_greed_index)}\n\n"""
 
-    print(f"### AI Decision Start ###")
+    print(f"### AI 매매 결정 시작 ###")
     # AI 응답 받기
     response = model.generate_content([
         {"role": "user", "parts": [{"text": system_prompt}]}, 
@@ -561,9 +584,9 @@ def ai_trading():
     # AI의 판단에 따라 실제로 자동매매 진행하기
     result = get_ai_response_to_json(response)
 
-    print(f"### AI Decision: {result["decision"].upper()} ###")
-    print(f"### Reason: {result["reason"]} ###")
-    print(f"### Percentage: {result["percentage"]} ###")
+    print(f"### AI 매매 결정: {result["decision"].upper()} ###")
+    print(f"### 이유: {result["reason"]} ###")
+    print(f"### 퍼센트: {result["percentage"]} ###")
 
     order_executed = False
 
@@ -572,26 +595,26 @@ def ai_trading():
         buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
         print(buy_amount)
         if buy_amount > 5000:
-            print(f"### Buy Order Executed: {result["percentage"]}% of available KRW ###")
+            print(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
             order = upbit.buy_market_order("KRW-BTC", buy_amount)
             if order:
                 order_executed = True
             print(order)
         else:
-            print("### Buy Order Failed: Insufficient KRW (less than 5000 KRW) ###")
+            print("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
     elif result["decision"] == "sell":
         my_btc = upbit.get_balance("KRW-BTC")
         sell_amount = my_btc * (result["percentage"] / 100)
         print(sell_amount)
         current_price = pyupbit.get_current_price("KRW-BTC")
         if sell_amount * current_price > 5000:
-            print(f"### Sell Order Executed: {result["percentage"]}% of held BTC ###")
+            print(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
             order = upbit.sell_market_order("KRW-BTC", sell_amount)
             if order:
                 order_executed = True
             print(order)
         else:
-            print("### Sell Order Failed: Insufficient BTC (less than 5000 KRW worth) ###")
+            print("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
 
     # 거래 실행 여부와 관계없이 현재 잔고 조회
     time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
@@ -610,8 +633,18 @@ def ai_trading():
 # Main loop
 while True:
     try:
-        ai_trading()
-        time.sleep(3600)  # 1시간 간격으로 실행 
+         # 현재 시간 가져오기
+        now = datetime.now()
+
+        ai_trading(now.hour)
+
+        # 다음 정시 계산
+        next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        # 대기 시간 계산 (다음 정시 - 현재 시간)
+        sleep_time = (next_hour - now).total_seconds()
+        print(f"현재 {sleep_time}초 뒤 {next_hour}에 자동으로 매매 기능이 동작합니다.")
+
+        time.sleep(sleep_time)  # 정시까지 대기
     except Exception as e:
-        logger.error(f"An error occurred: {e}")
+        logger.error(f"오류 발생: {e}")
         time.sleep(300)  # 오류 발생 시 5분 후 재시도
