@@ -81,8 +81,7 @@ def log_trade(conn, decision, percentage, reason, btc_balance, krw_balance, btc_
 
 def get_recent_trades(conn, days=7):
     c = conn.cursor()
-    seven_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
-    c.execute("SELECT * FROM trades WHERE timestamp > %s ORDER BY timestamp DESC", (seven_days_ago,))
+    c.execute("SELECT * FROM trades ORDER BY timestamp DESC LIMIT 3")
     columns = [column[0] for column in c.description]
     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
 
