@@ -1,0 +1,30 @@
+# Python 3.13 사용
+FROM python:3.13-slim
+
+# 필수 패키지 설치 (셀레니움 및 크롬 + 타임존 설정을 위한 `tzdata` 포함)
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    libnss3 \
+    curl \
+    tzdata && \
+    ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime && \
+    echo "Asia/Seoul" > /etc/timezone && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 의존성 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Python 스크립트 복사
+COPY autotrade.py .
+
+# 환경 변수 설정
+ENV PYTHONPATH=/app
+
+# 실행 (한국 시간대 적용됨)
+CMD ["python", "autotrade.py"]

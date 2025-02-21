@@ -9,3 +9,4 @@ webdriver_manager
 Pillow
 streamlit
 plotly
+mysql-connector-python

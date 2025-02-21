@@ -1,0 +1,24 @@
+# Python 3.13 사용
+FROM python:3.13-slim
+
+# 필수 패키지 설치
+RUN apt-get update && apt-get install -y \
+    libnss3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 의존성 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Streamlit Web App 파일 복사
+COPY streamlit_app.py .
+
+# 환경 변수 설정
+ENV PYTHONPATH=/app
+
+# Streamlit 실행
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501"]

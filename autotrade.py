@@ -6,9 +6,9 @@ import time
 import base64
 import logging
 import pyupbit
-import sqlite3
 import requests
 import pandas as pd
+import mysql.connector
 import google.generativeai as genai
 
 from selenium import webdriver
@@ -35,36 +35,54 @@ naver_client_key = os.getenv('NAVER_CLIENT_ID')
 naver_client_secret = os.getenv('NAVER_CLIENT_SECRET')
 serpapi_key = os.getenv("SERPAPI_API_KEY")
 
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv('MYSQL_HOST'),
+        port=os.getenv('MYSQL_PORT'),
+        user=os.getenv('MYSQL_USER'),
+        password=os.getenv('MYSQL_PASSWORD'),
+        database=os.getenv('MYSQL_DB')
+    )
+
 def init_db():
-    conn = sqlite3.connect('bitcoin_trades.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS trades
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  timestamp TEXT,
-                  decision TEXT,
-                  percentage INTEGER,
-                  reason TEXT,
-                  btc_balance REAL,
-                  krw_balance REAL,
-                  btc_avg_buy_price REAL,
-                  btc_krw_price REAL,
-                  reflection TEXT)''')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            decision VARCHAR(10),
+            percentage INT,
+            reason TEXT,
+            btc_balance DECIMAL(18,8),
+            krw_balance DECIMAL(18,8),
+            btc_avg_buy_price DECIMAL(18,8),
+            btc_krw_price DECIMAL(18,8),
+            reflection TEXT
+        )
+    ''')
     conn.commit()
-    return conn
+    cursor.close()
+    conn.close()
 
 def log_trade(conn, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection=''):
-    c = conn.cursor()
+    cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
-    c.execute("""INSERT INTO trades 
-                 (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection))
+    
+    sql = """INSERT INTO trades 
+             (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection) 
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+             
+    values = (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection)
+
+    cursor.execute(sql, values)
     conn.commit()
+    cursor.close()
 
 def get_recent_trades(conn, days=7):
     c = conn.cursor()
     seven_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
-    c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (seven_days_ago,))
+    c.execute("SELECT * FROM trades WHERE timestamp > %s ORDER BY timestamp DESC", (seven_days_ago,))
     columns = [column[0] for column in c.description]
     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
 
@@ -100,7 +118,7 @@ def generate_reflection(trades_df, current_market_data):
     
     Limit your response to 250 words or less.(Strictly Follow!)"""
 
-    print(f"### AI 피드백 시작 ###")
+    logger.info(f"### AI 피드백 시작 ###")
     # AI 응답 받기
     response = model.generate_content([
         {"role": "user", "parts": [{"text": system_prompt}]}, 
@@ -109,12 +127,9 @@ def generate_reflection(trades_df, current_market_data):
     response_json = response.to_dict()
     # JSON 데이터 추출
     result = response_json["candidates"][0]["content"]["parts"][0]["text"]
-    print(f"### AI 피드백: {result} ###")
+    logger.info(f"### AI 피드백: {result} ###")
     
     return result
-
-def get_db_connection():
-    return sqlite3.connect('bitcoin_trades.db')
 
 def add_indicators(df):
     # 볼린저 밴드
@@ -190,23 +205,45 @@ def get_bitcoin_naver_news():
         print(f"네이버 뉴스를 가져오는 중 오류 발생: {news_response.status_code}")
     return news
 
-def setup_chrome_options():
-    chrome_options = Options()
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--enable-unsafe-swiftshader")
-    chrome_options.add_argument("--window-size=1920,3000")
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    return chrome_options
+# # 로컬용
+# def setup_chrome_options():
+#     chrome_options = Options()
+#     chrome_options.add_argument("--start-maximized")
+#     chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
+#     chrome_options.add_argument("--disable-gpu")
+#     chrome_options.add_argument("--no-sandbox")
+#     chrome_options.add_argument("--disable-dev-shm-usage")
+#     chrome_options.add_argument("--enable-unsafe-swiftshader")
+#     chrome_options.add_argument("--window-size=1920,3000")
+#     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+#     return chrome_options
 
+# def create_driver():
+#     logger.info("ChromeDriver 설정 중...")
+#     service = Service(ChromeDriverManager().install())
+#     driver = webdriver.Chrome(service=service, options=setup_chrome_options())
+#     return driver
+
+# EC2 서버용
 def create_driver():
     logger.info("ChromeDriver 설정 중...")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=setup_chrome_options())
-    return driver
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")  # 헤드리스 모드 사용
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,3000")
+
+        service = Service('/usr/bin/chromedriver')  # Specify the path to the ChromeDriver executable
+
+        # Initialize the WebDriver with the specified options
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        return driver
+    except Exception as e:
+        logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
+        raise
 
 def scroll_into_view(driver, xpath):
     try:
@@ -360,10 +397,7 @@ def capture_and_encode_screenshot(driver):
         
         # PIL Image로 변환
         img = Image.open(io.BytesIO(png))
-        
-        # 이미지 리사이즈 (OpenAI API 제한에 맞춤)
-        img.thumbnail((2000, 2000))
-        
+
         # 현재 시간을 파일명에 포함
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"upbit_chart_{current_time}.png"
@@ -397,26 +431,31 @@ def prepare_image_for_gemini(base64_image_str, image_path):
 
         return {"mime_type": "image/png", "data": image_bytes}
     except Exception as e:
-        print(f"이미지 처리 중 오류 발생: {e}")
+        logger.error(f"이미지 처리 중 오류 발생: {e}")
         return None
     
 def get_ai_response_to_json(response):
     response_json = response.to_dict()
 
     # JSON 데이터 추출
-    text_content = response_json["candidates"][0]["content"]["parts"][0]["text"]
-    json_string = text_content.strip("```json\n").strip("```")
+    try:
+        text_content = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        json_string = text_content.strip("```json\n").strip("```")
 
-    return json.loads(json_string)
+        return json.loads(json_string)
+    except Exception as e:
+        print(f"AI 응답 처리 오류 발생: {e}")
+        return {"decision": "hold", "percentage": 0, "reason": "AI response analysis failed - default to hold"}
 
-# 데이터베이스 초기화
-init_db()
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# 데이터베이스 초기화
+init_db()
 google_news_headlines = []
 
 def ai_trading(current_hour):
+    global google_news_headlines
     # Upbit 객체 생성
     upbit = pyupbit.Upbit(upbit_access_key, upbit_secret_key)
 
@@ -573,7 +612,7 @@ def ai_trading(current_hour):
     Recent news headlines from Naver: {json.dumps(naver_news_headlines)}
     Fear and Greed Index: {json.dumps(fear_greed_index)}\n\n"""
 
-    print(f"### AI 매매 결정 시작 ###")
+    logger.info(f"### AI 매매 결정 시작 ###")
     # AI 응답 받기
     response = model.generate_content([
         {"role": "user", "parts": [{"text": system_prompt}]}, 
@@ -582,39 +621,36 @@ def ai_trading(current_hour):
     ])
 
     # AI의 판단에 따라 실제로 자동매매 진행하기
+    print(f"### Response : {response}")
     result = get_ai_response_to_json(response)
 
-    print(f"### AI 매매 결정: {result["decision"].upper()} ###")
-    print(f"### 이유: {result["reason"]} ###")
-    print(f"### 퍼센트: {result["percentage"]} ###")
+    logger.info(f"### AI 매매 결정 : {result["decision"].upper()} ###")
+    logger.info(f"### 이유 : {result["reason"]} ###")
+    logger.info(f"### 퍼센트 : {result["percentage"]} ###")
 
     order_executed = False
 
     if result["decision"] == "buy":
         my_krw = upbit.get_balance("KRW")
         buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
-        print(buy_amount)
         if buy_amount > 5000:
-            print(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
+            logger.info(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
             order = upbit.buy_market_order("KRW-BTC", buy_amount)
             if order:
                 order_executed = True
-            print(order)
         else:
-            print("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
+            logger.error("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
     elif result["decision"] == "sell":
         my_btc = upbit.get_balance("KRW-BTC")
         sell_amount = my_btc * (result["percentage"] / 100)
-        print(sell_amount)
         current_price = pyupbit.get_current_price("KRW-BTC")
         if sell_amount * current_price > 5000:
-            print(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
+            logger.info(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
             order = upbit.sell_market_order("KRW-BTC", sell_amount)
             if order:
                 order_executed = True
-            print(order)
         else:
-            print("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
+            logger.error("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
 
     # 거래 실행 여부와 관계없이 현재 잔고 조회
     time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
@@ -642,7 +678,7 @@ while True:
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         # 대기 시간 계산 (다음 정시 - 현재 시간)
         sleep_time = (next_hour - now).total_seconds()
-        print(f"현재 {sleep_time}초 뒤 {next_hour}에 자동으로 매매 기능이 동작합니다.")
+        logger.info(f"현재 {sleep_time}초 뒤 {next_hour}에 자동으로 매매 기능이 동작합니다.")
 
         time.sleep(sleep_time)  # 정시까지 대기
     except Exception as e:
