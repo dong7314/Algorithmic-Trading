@@ -669,12 +669,11 @@ def ai_trading(current_hour):
 # Main loop
 while True:
     try:
-         # 현재 시간 가져오기
-        now = datetime.now()
-
-        ai_trading(now.hour)
+         # 현재 시간 전달
+        ai_trading(datetime.now().hour)
 
         # 다음 정시 계산
+        now = datetime.now()
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         # 대기 시간 계산 (다음 정시 - 현재 시간)
         sleep_time = (next_hour - now).total_seconds()
