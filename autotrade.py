@@ -27,8 +27,10 @@ from datetime import datetime, timedelta
 
 load_dotenv()
 
+initial_capital = os.getenv('INITIAL_CAPITAL')
 gemini_key = os.getenv('GEMINI_KEY')
-getmini_model = os.getenv('GEMINI_MODEL')
+gemini_model = os.getenv('GEMINI_MODEL')
+gemini_sub_model = os.getenv('GEMINI_SUB_MODEL')
 upbit_access_key = os.getenv("UPBIT_ACCESS_KEY")
 upbit_secret_key = os.getenv("UPBIT_SECRET_KEY")
 naver_client_key = os.getenv('NAVER_CLIENT_ID')
@@ -58,6 +60,7 @@ def init_db():
             krw_balance DECIMAL(18,8),
             btc_avg_buy_price DECIMAL(18,8),
             btc_krw_price DECIMAL(18,8),
+            revenue_rate DECIMAL(6,2),
             reflection TEXT
         )
     ''')
@@ -65,21 +68,21 @@ def init_db():
     cursor.close()
     conn.close()
 
-def log_trade(conn, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection=''):
+def log_trade(conn, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, revenue_rate, reflection=''):
     cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
     
     sql = """INSERT INTO trades 
-             (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection) 
-             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+             (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, revenue_rate, reflection) 
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
              
-    values = (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, reflection)
+    values = (timestamp, decision, percentage, reason, btc_balance, krw_balance, btc_avg_buy_price, btc_krw_price, revenue_rate, reflection)
 
     cursor.execute(sql, values)
     conn.commit()
     cursor.close()
 
-def get_recent_trades(conn, days=7):
+def get_recent_trades(conn):
     c = conn.cursor()
     c.execute("SELECT * FROM trades ORDER BY timestamp DESC LIMIT 3")
     columns = [column[0] for column in c.description]
@@ -96,39 +99,146 @@ def calculate_performance(trades_df):
 
 def generate_reflection(trades_df, current_market_data):
     genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel(f"models/{getmini_model}")
-    performance = calculate_performance(trades_df)
+    
+    def get_ai_response(model_name):
+        model = genai.GenerativeModel(model_name)
+        
+        performance = calculate_performance(trades_df)
+        
+        system_prompt = """You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."""
+        
+        user_prompt = f"""Recent trading data:
+        {trades_df.to_json(orient='records')}
+        
+        Current market data:
+        {current_market_data}
+        
+        Overall performance over the last 3 transactions: {performance:.2f}%
+        
+        Please analyze this data and provide:
+        1. A brief reflection on the recent trading decisions
+        2. Insights on what worked well and what didn't
+        3. Suggestions for improvement in future trading decisions
+        4. Any patterns or trends you notice in the market data
+        
+        Limit your response to 250 words or less. (Strictly Follow!)"""
+        
+        logger.info(f"### AI 피드백 시작 (모델: {model_name}) ###")
+        response = model.generate_content([
+            {"role": "user", "parts": [{"text": system_prompt}]},
+            {"role": "user", "parts": [{"text": user_prompt}]},
+        ])
+        response_json = response.to_dict()
+        result = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        logger.info(f"### AI 피드백: {result} ###")
+        return result
+    
+    try:
+        return get_ai_response(gemini_model)
+    except Exception as e:
+        if "429" in str(e):  # Too Many Requests 오류 감지
+            logging.warning(f"429 Too Many Requests 발생. 백업 모델 {gemini_sub_model} 사용")
+            return get_ai_response(gemini_sub_model)
+        else:
+            logging.error(f"Gemini API 호출 중 오류 발생: {e}")
+            return "AI 답변 중 오류 발생"
 
-    system_prompt = """You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."""
+def generate_response(reflection, indicators_data):
+    genai.configure(api_key=gemini_key)
+    
+    def get_ai_response(model_name):
+        model = genai.GenerativeModel(model_name)
+        
+        system_prompt = f"""You are an expert in Bitcoin investing and strictly follow the trading principles of the legendary Korean Bitcoin trader 'Wonyo-ddi.' Analyze the provided chart image, which includes key technical indicators, along with market data, recent news headlines, and the Fear and Greed Index. Based on this analysis, determine whether to buy, sell, or hold at the moment while adhering to Wonyo-ddi's trading philosophy.
 
-    user_prompt = f"""Recent trading data:
-    {trades_df.to_json(orient='records')}
-    
-    Current market data:
-    {current_market_data}
-    
-    Overall performance in the last 7 days: {performance:.2f}%
-    
-    Please analyze this data and provide:
-    1. A brief reflection on the recent trading decisions
-    2. Insights on what worked well and what didn't
-    3. Suggestions for improvement in future trading decisions
-    4. Any patterns or trends you notice in the market data
-    
-    Limit your response to 250 words or less.(Strictly Follow!)"""
+        ### Wonyo-ddi's Trading Principles to Follow:
+        1. Strictly Chart-Based Trading
+        - Ignore fundamental news and external sentiment unless it directly impacts market structure.
+        - Rely primarily on price action and market structure for trade decisions.
+        - Use simple indicators, mainly candlestick patterns, moving averages, and price trends.
+        - Avoid excessive reliance on indicators like RSI, MACD, and Bollinger Bands, except for confirmation.
 
-    logger.info(f"### AI 피드백 시작 ###")
-    # AI 응답 받기
-    response = model.generate_content([
-        {"role": "user", "parts": [{"text": system_prompt}]}, 
-        {"role": "user", "parts": [{"text": user_prompt}]}, 
-    ])
-    response_json = response.to_dict()
-    # JSON 데이터 추출
-    result = response_json["candidates"][0]["content"]["parts"][0]["text"]
-    logger.info(f"### AI 피드백: {result} ###")
+        2. Market Sentiment & Adaptive Trading
+        - Gauge overall market sentiment through price action and volume.
+        - Adapt trading strategy based on market conditions:
+        - In bullish markets, weak bearish signals can be ignored.
+        - In bearish markets, weak bullish signals should not be trusted.
+        - Identify liquidity zones where large movements are likely to occur.
+
+        3. Risk Management & Capital Allocation
+        - Never invest more than 20-30% of total capital in a single trade.
+        - Use low leverage (preferably under 5x, avoid high leverage).
+        - Maintain a portion of capital for unexpected market movements and recovery.
+        - Use stop-loss only if trade setup is invalidated, rather than mechanical stop-loss levels.
+
+        4. Compounding & Position Management
+        - Focus on high win-rate trades over high reward-to-risk setups.
+        - Avoid taking large, high-risk positions that rely on one-time gains.
+        - Compound gains steadily over time instead of seeking single massive wins.
+
+        5. Practical Chart Application
+        - Use daily and 4-hour charts for trend direction.
+        - Use hourly charts for precision entries.
+        - Avoid noise from very small timeframes (e.g., 1-minute or 5-minute charts).
+        - Price action and volume analysis take precedence over lagging indicators.
+
+        ### Decision-Making Factors:
+        In your analysis, consider the following factors:  
+        - **Chart analysis** (MACD, ADX, RSI, Stochastic, Bollinger Bands, ATR, OBV, VWAP)  
+        - **Market data and trends**  
+        - **Recent news headlines and their potential impact on Bitcoin price**  
+        - **The Fear and Greed Index and its implications**  
+        - **Overall market sentiment**  
+        - Recent trading performance and reflection
+
+        Ensure that you analyze the trend strength, momentum, volatility, and accumulation behavior using the given indicators.  
+
+        ### Recent trading reflection:
+        {reflection}
+
+        ### Response Format:
+        1. Decision (buy, sell, or hold)
+        2. If the decision is 'buy', provide a percentage (1-100) of available KRW to use for buying. If the decision is 'sell', provide a percentage (1-100) of held BTC to sell. If the decision is 'hold', set the percentage to 0.
+        3. Reason for your decision
+
+        Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
+        Your percentage should reflect the strength of your conviction in the decision based on the analyzed data.
+
+        Your response should be in JSON format as follows (Strictly Follow!):  
+
+        {'{"decision": "buy", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}
+        {'{"decision": "sell", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}
+        {'{"decision": "hold", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}\n\n"""
+        
+        # 행동 강령이 포함된 프롬프트
+        user_prompt = f"""### Data to provide
+        Current investment status: {json.dumps(indicators_data["filtered_balances"])}
+        Orderbook: {json.dumps(indicators_data["orderbook"])}
+        Daily OHLCV with indicators (30 days): {indicators_data["df_daily"].to_json()}
+        4-Hourly OHLCV with indicators (24 counts): {indicators_data["df_4hourly"].to_json()}
+        Hourly OHLCV with indicators (24 hours): {indicators_data["df_hourly"].to_json()}
+        Recent news headlines from Google: {json.dumps(indicators_data["google_news_headlines"])}
+        Recent news headlines from Naver: {json.dumps(indicators_data["naver_news_headlines"])}
+        Fear and Greed Index: {json.dumps(indicators_data["fear_greed_index"])}\n\n"""
+        
+        logger.info(f"### AI 매매 결정 시작 ###")
+        # AI 응답 받기
+        response = model.generate_content([
+            {"role": "user", "parts": [{"text": system_prompt}]}, 
+            {"role": "user", "parts": [{"text": user_prompt}]}, 
+            {"role": "user", "parts": [indicators_data["image_part"]]} 
+        ])
+        return response
     
-    return result
+    try:
+        return get_ai_response(gemini_model)
+    except Exception as e:
+        if "429" in str(e):  # Too Many Requests 오류 감지
+            logging.warning(f"429 Too Many Requests 발생. 백업 모델 {gemini_sub_model} 사용")
+            return get_ai_response(gemini_sub_model)
+        else:
+            logging.error(f"Gemini API 호출 중 오류 발생: {e}")
+            return "AI 답변 중 오류 발생"
 
 def add_indicators(df):
     # 볼린저 밴드
@@ -205,44 +315,44 @@ def get_bitcoin_naver_news():
     return news
 
 # # 로컬용
-# def setup_chrome_options():
-#     chrome_options = Options()
-#     chrome_options.add_argument("--start-maximized")
-#     chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
-#     chrome_options.add_argument("--disable-gpu")
-#     chrome_options.add_argument("--no-sandbox")
-#     chrome_options.add_argument("--disable-dev-shm-usage")
-#     chrome_options.add_argument("--enable-unsafe-swiftshader")
-#     chrome_options.add_argument("--window-size=1920,3000")
-#     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-#     return chrome_options
+def setup_chrome_options():
+    chrome_options = Options()
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--enable-unsafe-swiftshader")
+    chrome_options.add_argument("--window-size=1920,3000")
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    return chrome_options
 
-# def create_driver():
-#     logger.info("ChromeDriver 설정 중...")
-#     service = Service(ChromeDriverManager().install())
-#     driver = webdriver.Chrome(service=service, options=setup_chrome_options())
-#     return driver
-
-# EC2 서버용
 def create_driver():
     logger.info("ChromeDriver 설정 중...")
-    try:
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")  # 헤드리스 모드 사용
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,3000")
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=setup_chrome_options())
+    return driver
 
-        service = Service('/usr/bin/chromedriver')  # Specify the path to the ChromeDriver executable
+# EC2 서버용
+# def create_driver():
+#     logger.info("ChromeDriver 설정 중...")
+#     try:
+#         chrome_options = Options()
+#         chrome_options.add_argument("--headless")  # 헤드리스 모드 사용
+#         chrome_options.add_argument("--no-sandbox")
+#         chrome_options.add_argument("--disable-dev-shm-usage")
+#         chrome_options.add_argument("--disable-gpu")
+#         chrome_options.add_argument("--window-size=1920,3000")
 
-        # Initialize the WebDriver with the specified options
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+#         service = Service('/usr/bin/chromedriver')  # Specify the path to the ChromeDriver executable
 
-        return driver
-    except Exception as e:
-        logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
-        raise
+#         # Initialize the WebDriver with the specified options
+#         driver = webdriver.Chrome(service=service, options=chrome_options)
+
+#         return driver
+#     except Exception as e:
+#         logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
+#         raise
 
 def scroll_into_view(driver, xpath):
     try:
@@ -255,7 +365,7 @@ def scroll_into_view(driver, xpath):
     except Exception as e:
         logger.error(f"스크롤 중 오류 발생: {e}")
 
-def click_element_by_xpath(driver, xpath, element_name, wait_time=5):
+def click_element_by_xpath(driver, xpath, element_name, wait_time=1):
     try:
         # 요소가 보이도록 스크롤
         scroll_into_view(driver, xpath)
@@ -446,6 +556,28 @@ def get_ai_response_to_json(response):
         print(f"AI 응답 처리 오류 발생: {e}")
         return {"decision": "hold", "percentage": 0, "reason": "AI response analysis failed - default to hold"}
 
+def get_revenue_rate(balances, initial_investment):
+    current_value = 0.0 
+    
+    for coin in balances:
+        coin_currency = coin['currency']
+        coin_balance = float(coin['balance'])
+        coin_avg_buy_price = float(coin['avg_buy_price'])
+        
+        # KRW와 BTC 모두 고려하여 계산
+        if coin_currency == 'KRW':
+            current_value += coin_balance  # 현재 KRW 잔고
+        elif coin_currency == 'BTC':
+            # BTC의 현재 가격 가져오기
+            coin_ticker = coin['unit_currency'] + "-" + coin_currency
+            now_price = pyupbit.get_current_price(coin_ticker)  # 현재 BTC 가격을 KRW로 환산
+            current_value += coin_balance * now_price  # BTC를 현재 시세로 환산한 가치
+    
+    # 수익률 계산
+    revenue_rate = round(current_value / initial_investment * 100.0, 2) - 100
+    
+    return revenue_rate
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -536,88 +668,18 @@ def ai_trading(current_hour):
     image_part = prepare_image_for_gemini(chart_image, saved_file_path)
 
     # AI에게 데이터 제공하고 판단 받기
-    genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel(f"models/{getmini_model}")
-
-    system_prompt = f"""You are an expert in Bitcoin investing and strictly follow the trading principles of the legendary Korean Bitcoin trader 'Wonyo-ddi.' Analyze the provided chart image, which includes key technical indicators, along with market data, recent news headlines, and the Fear and Greed Index. Based on this analysis, determine whether to buy, sell, or hold at the moment while adhering to Wonyo-ddi's trading philosophy.
-
-    ### Wonyo-ddi's Trading Principles to Follow:
-    1. Strictly Chart-Based Trading
-    - Ignore fundamental news and external sentiment unless it directly impacts market structure.
-    - Rely primarily on price action and market structure for trade decisions.
-    - Use simple indicators, mainly candlestick patterns, moving averages, and price trends.
-    - Avoid excessive reliance on indicators like RSI, MACD, and Bollinger Bands, except for confirmation.
-
-    2. Market Sentiment & Adaptive Trading
-    - Gauge overall market sentiment through price action and volume.
-    - Adapt trading strategy based on market conditions:
-      - In bullish markets, weak bearish signals can be ignored.
-      - In bearish markets, weak bullish signals should not be trusted.
-    - Identify liquidity zones where large movements are likely to occur.
-
-    3. Risk Management & Capital Allocation
-    - Never invest more than 20-30% of total capital in a single trade.
-    - Use low leverage (preferably under 5x, avoid high leverage).
-    - Maintain a portion of capital for unexpected market movements and recovery.
-    - Use stop-loss only if trade setup is invalidated, rather than mechanical stop-loss levels.
-
-    4. Compounding & Position Management
-    - Focus on high win-rate trades over high reward-to-risk setups.
-    - Avoid taking large, high-risk positions that rely on one-time gains.
-    - Compound gains steadily over time instead of seeking single massive wins.
-
-    5. Practical Chart Application
-    - Use daily and 4-hour charts for trend direction.
-    - Use hourly charts for precision entries.
-    - Avoid noise from very small timeframes (e.g., 1-minute or 5-minute charts).
-    - Price action and volume analysis take precedence over lagging indicators.
-
-    ### Decision-Making Factors:
-    In your analysis, consider the following factors:  
-    - **Chart analysis** (MACD, ADX, RSI, Stochastic, Bollinger Bands, ATR, OBV, VWAP)  
-    - **Market data and trends**  
-    - **Recent news headlines and their potential impact on Bitcoin price**  
-    - **The Fear and Greed Index and its implications**  
-    - **Overall market sentiment**  
-    - Recent trading performance and reflection
-
-    Ensure that you analyze the trend strength, momentum, volatility, and accumulation behavior using the given indicators.  
-
-    ### Recent trading reflection:
-    {reflection}
-
-    ### Response Format:
-    1. Decision (buy, sell, or hold)
-    2. If the decision is 'buy', provide a percentage (1-100) of available KRW to use for buying. If the decision is 'sell', provide a percentage (1-100) of held BTC to sell. If the decision is 'hold', set the percentage to 0.
-    3. Reason for your decision
-
-    Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
-    Your percentage should reflect the strength of your conviction in the decision based on the analyzed data.
-
-    Your response should be in JSON format as follows (Strictly Follow!):  
-
-    {'{"decision": "buy", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}
-    {'{"decision": "sell", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}
-    {'{"decision": "hold", "percentage": {"type": "integer"}, "reason": "some technical, fundamental, and sentiment-based reason"}'}\n\n"""
-
-    # 행동 강령이 포함된 프롬프트
-    user_prompt = f"""### Data to provide
-    Current investment status: {json.dumps(filtered_balances)}
-    Orderbook: {json.dumps(orderbook)}
-    Daily OHLCV with indicators (30 days): {df_daily.to_json()}
-    4-Hourly OHLCV with indicators (24 counts): {df_4hourly.to_json()}
-    Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-    Recent news headlines from Google: {json.dumps(google_news_headlines)}
-    Recent news headlines from Naver: {json.dumps(naver_news_headlines)}
-    Fear and Greed Index: {json.dumps(fear_greed_index)}\n\n"""
-
-    logger.info(f"### AI 매매 결정 시작 ###")
-    # AI 응답 받기
-    response = model.generate_content([
-        {"role": "user", "parts": [{"text": system_prompt}]}, 
-        {"role": "user", "parts": [{"text": user_prompt}]}, 
-        {"role": "user", "parts": [image_part]} 
-    ])
+    indicators_data = {
+        "filtered_balances": filtered_balances,
+        "orderbook": orderbook,
+        "df_daily": df_daily,
+        "df_4hourly": df_4hourly,
+        "df_hourly": df_hourly,
+        "google_news_headlines": google_news_headlines,
+        "naver_news_headlines": naver_news_headlines,
+        "fear_greed_index": fear_greed_index,
+        "image_part": image_part
+    }
+    response = generate_response(reflection, indicators_data)
 
     # AI의 판단에 따라 실제로 자동매매 진행하기
     print(f"### Response : {response}")
@@ -627,40 +689,43 @@ def ai_trading(current_hour):
     logger.info(f"### 이유 : {result["reason"]} ###")
     logger.info(f"### 퍼센트 : {result["percentage"]} ###")
 
-    order_executed = False
+    # order_executed = False
 
-    if result["decision"] == "buy":
-        my_krw = upbit.get_balance("KRW")
-        buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
-        if buy_amount > 5000:
-            logger.info(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
-            order = upbit.buy_market_order("KRW-BTC", buy_amount)
-            if order:
-                order_executed = True
-        else:
-            logger.error("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
-    elif result["decision"] == "sell":
-        my_btc = upbit.get_balance("KRW-BTC")
-        sell_amount = my_btc * (result["percentage"] / 100)
-        current_price = pyupbit.get_current_price("KRW-BTC")
-        if sell_amount * current_price > 5000:
-            logger.info(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
-            order = upbit.sell_market_order("KRW-BTC", sell_amount)
-            if order:
-                order_executed = True
-        else:
-            logger.error("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
+    # if result["decision"] == "buy":
+    #     my_krw = upbit.get_balance("KRW")
+    #     buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
+    #     if buy_amount > 5000:
+    #         logger.info(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
+    #         order = upbit.buy_market_order("KRW-BTC", buy_amount)
+    #         if order:
+    #             order_executed = True
+    #     else:
+    #         logger.error("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
+    # elif result["decision"] == "sell":
+    #     my_btc = upbit.get_balance("KRW-BTC")
+    #     sell_amount = my_btc * (result["percentage"] / 100)
+    #     current_price = pyupbit.get_current_price("KRW-BTC")
+    #     if sell_amount * current_price > 5000:
+    #         logger.info(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
+    #         order = upbit.sell_market_order("KRW-BTC", sell_amount)
+    #         if order:
+    #             order_executed = True
+    #     else:
+    #         logger.error("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
 
     # 거래 실행 여부와 관계없이 현재 잔고 조회
     time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
     balances = upbit.get_balances()
-    btc_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'BTC'), 0)
-    krw_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'KRW'), 0)
-    btc_avg_buy_price = next((float(balance['avg_buy_price']) for balance in balances if balance['currency'] == 'BTC'), 0)
-    current_btc_price = pyupbit.get_current_price("KRW-BTC")
+    print("### Balances", balances)
+    print("현재 투자 수익률 : ", get_revenue_rate(balances, int(initial_capital)))
+    revenue_rate = get_revenue_rate(balances, int(initial_capital))
+    # btc_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'BTC'), 0)
+    # krw_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'KRW'), 0)
+    # btc_avg_buy_price = next((float(balance['avg_buy_price']) for balance in balances if balance['currency'] == 'BTC'), 0)
+    # current_btc_price = pyupbit.get_current_price("KRW-BTC")
 
-    # 거래 정보 로깅
-    log_trade(conn, result["decision"], result["percentage"] if order_executed else 0, result["reason"], btc_balance, krw_balance, btc_avg_buy_price, current_btc_price, reflection)
+    # # 거래 정보 로깅
+    # log_trade(conn, result["decision"], result["percentage"] if order_executed else 0, result["reason"], btc_balance, krw_balance, btc_avg_buy_price, current_btc_price, revenue_rate, reflection)
 
     # 데이터베이스 연결 종료
     conn.close()
