@@ -52,11 +52,13 @@ def main():
     st.write(f"마지막 거래 날짜: **{format_datetime(df['timestamp'].max())}**")
     st.write("")  
     st.write("")  
-    
+
     # 가장 최근 거래 내역
     st.header('📌 가장 최근 거래 내역')
     latest_trade = df.iloc[0]  
     decision_color = "#008000" if latest_trade['decision'] == 'buy' else "#FF0000" if latest_trade['decision'] == 'sell' else "#808080"
+    revenue_color = "#0000FF" if latest_trade['revenue_rate'] >= 0 else "#FF0000"
+    
     custom_style = f"""
     <style>
         .custom-box {{
@@ -72,8 +74,9 @@ def main():
         <div class="custom-box">
             <h3>🕒 거래 시간: {format_datetime(latest_trade['timestamp'])}</h3>
             <h4 style="color: {decision_color};">📌 거래 결정: {latest_trade['decision'].upper()}</h4>
-            <p>🔍 <b>결정 이유:</b> {latest_trade['reason']}</p>
+            <p><b>💹 최근 거래 수익률:</b> <span style='color:{revenue_color};'>{latest_trade['revenue_rate']:.2f}%</span></p>
             <p>📊 <b>거래 비율:</b> {latest_trade['percentage']}%</p>
+            <p>🔍 <b>결정 이유:</b> {latest_trade['reason']}</p>
         </div>
         """,
         unsafe_allow_html=True,
