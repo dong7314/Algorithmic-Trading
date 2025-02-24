@@ -315,44 +315,44 @@ def get_bitcoin_naver_news():
     return news
 
 # # 로컬용
-def setup_chrome_options():
-    chrome_options = Options()
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--enable-unsafe-swiftshader")
-    chrome_options.add_argument("--window-size=1920,3000")
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    return chrome_options
+# def setup_chrome_options():
+#     chrome_options = Options()
+#     chrome_options.add_argument("--start-maximized")
+#     chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
+#     chrome_options.add_argument("--disable-gpu")
+#     chrome_options.add_argument("--no-sandbox")
+#     chrome_options.add_argument("--disable-dev-shm-usage")
+#     chrome_options.add_argument("--enable-unsafe-swiftshader")
+#     chrome_options.add_argument("--window-size=1920,3000")
+#     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+#     return chrome_options
 
-def create_driver():
-    logger.info("ChromeDriver 설정 중...")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=setup_chrome_options())
-    return driver
-
-# EC2 서버용
 # def create_driver():
 #     logger.info("ChromeDriver 설정 중...")
-#     try:
-#         chrome_options = Options()
-#         chrome_options.add_argument("--headless")  # 헤드리스 모드 사용
-#         chrome_options.add_argument("--no-sandbox")
-#         chrome_options.add_argument("--disable-dev-shm-usage")
-#         chrome_options.add_argument("--disable-gpu")
-#         chrome_options.add_argument("--window-size=1920,3000")
+#     service = Service(ChromeDriverManager().install())
+#     driver = webdriver.Chrome(service=service, options=setup_chrome_options())
+#     return driver
 
-#         service = Service('/usr/bin/chromedriver')  # Specify the path to the ChromeDriver executable
+# EC2 서버용
+def create_driver():
+    logger.info("ChromeDriver 설정 중...")
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")  # 헤드리스 모드 사용
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,3000")
 
-#         # Initialize the WebDriver with the specified options
-#         driver = webdriver.Chrome(service=service, options=chrome_options)
+        service = Service('/usr/bin/chromedriver')  # Specify the path to the ChromeDriver executable
 
-#         return driver
-#     except Exception as e:
-#         logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
-#         raise
+        # Initialize the WebDriver with the specified options
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        return driver
+    except Exception as e:
+        logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
+        raise
 
 def scroll_into_view(driver, xpath):
     try:
@@ -562,7 +562,6 @@ def get_revenue_rate(balances, initial_investment):
     for coin in balances:
         coin_currency = coin['currency']
         coin_balance = float(coin['balance'])
-        coin_avg_buy_price = float(coin['avg_buy_price'])
         
         # KRW와 BTC 모두 고려하여 계산
         if coin_currency == 'KRW':
@@ -574,7 +573,7 @@ def get_revenue_rate(balances, initial_investment):
             current_value += coin_balance * now_price  # BTC를 현재 시세로 환산한 가치
     
     # 수익률 계산
-    revenue_rate = round(current_value / initial_investment * 100.0, 2) - 100
+    revenue_rate = round(round((int(current_value) / initial_investment) * 100.0, 2) - 100, 2)
     
     return revenue_rate
 
@@ -689,43 +688,41 @@ def ai_trading(current_hour):
     logger.info(f"### 이유 : {result["reason"]} ###")
     logger.info(f"### 퍼센트 : {result["percentage"]} ###")
 
-    # order_executed = False
+    order_executed = False
 
-    # if result["decision"] == "buy":
-    #     my_krw = upbit.get_balance("KRW")
-    #     buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
-    #     if buy_amount > 5000:
-    #         logger.info(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
-    #         order = upbit.buy_market_order("KRW-BTC", buy_amount)
-    #         if order:
-    #             order_executed = True
-    #     else:
-    #         logger.error("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
-    # elif result["decision"] == "sell":
-    #     my_btc = upbit.get_balance("KRW-BTC")
-    #     sell_amount = my_btc * (result["percentage"] / 100)
-    #     current_price = pyupbit.get_current_price("KRW-BTC")
-    #     if sell_amount * current_price > 5000:
-    #         logger.info(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
-    #         order = upbit.sell_market_order("KRW-BTC", sell_amount)
-    #         if order:
-    #             order_executed = True
-    #     else:
-    #         logger.error("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
+    if result["decision"] == "buy":
+        my_krw = upbit.get_balance("KRW")
+        buy_amount = my_krw * (result["percentage"] / 100) * 0.9995  # 수수료 고려
+        if buy_amount > 5000:
+            logger.info(f"### 실행된 매수 주문: 사용 가능한 원화의 {result["percentage"]}% ###")
+            order = upbit.buy_market_order("KRW-BTC", buy_amount)
+            if order:
+                order_executed = True
+        else:
+            logger.error("### 매수 주문 실패: 원화 부족(5,000원 ​​미만) ###")
+    elif result["decision"] == "sell":
+        my_btc = upbit.get_balance("KRW-BTC")
+        sell_amount = my_btc * (result["percentage"] / 100)
+        current_price = pyupbit.get_current_price("KRW-BTC")
+        if sell_amount * current_price > 5000:
+            logger.info(f"### 실행된 매도 주문: 보유 BTC의 {result["percentage"]}% ###")
+            order = upbit.sell_market_order("KRW-BTC", sell_amount)
+            if order:
+                order_executed = True
+        else:
+            logger.error("### 매도 주문 실패: BTC 부족(한화 5000원 미만) ###")
 
     # 거래 실행 여부와 관계없이 현재 잔고 조회
     time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
     balances = upbit.get_balances()
-    print("### Balances", balances)
-    print("현재 투자 수익률 : ", get_revenue_rate(balances, int(initial_capital)))
     revenue_rate = get_revenue_rate(balances, int(initial_capital))
-    # btc_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'BTC'), 0)
-    # krw_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'KRW'), 0)
-    # btc_avg_buy_price = next((float(balance['avg_buy_price']) for balance in balances if balance['currency'] == 'BTC'), 0)
-    # current_btc_price = pyupbit.get_current_price("KRW-BTC")
+    btc_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'BTC'), 0)
+    krw_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'KRW'), 0)
+    btc_avg_buy_price = next((float(balance['avg_buy_price']) for balance in balances if balance['currency'] == 'BTC'), 0)
+    current_btc_price = pyupbit.get_current_price("KRW-BTC")
 
-    # # 거래 정보 로깅
-    # log_trade(conn, result["decision"], result["percentage"] if order_executed else 0, result["reason"], btc_balance, krw_balance, btc_avg_buy_price, current_btc_price, revenue_rate, reflection)
+    # 거래 정보 로깅
+    log_trade(conn, result["decision"], result["percentage"] if order_executed else 0, result["reason"], btc_balance, krw_balance, btc_avg_buy_price, current_btc_price, revenue_rate, reflection)
 
     # 데이터베이스 연결 종료
     conn.close()
@@ -733,7 +730,7 @@ def ai_trading(current_hour):
 # Main loop
 while True:
     try:
-         # 현재 시간 전달
+        # 현재 시간 전달
         ai_trading(datetime.now().hour)
 
         # 다음 정시 계산
