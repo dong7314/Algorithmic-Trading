@@ -141,7 +141,7 @@ def generate_reflection(trades_df, current_market_data):
             return get_ai_response(gemini_sub_model)
         else:
             logging.error(f"Gemini API 호출 중 오류 발생: {e}")
-            return "AI 답변 중 오류 발생"
+            return "An error occurred during AI response"
 
 def generate_response(reflection, indicators_data):
     genai.configure(api_key=gemini_key)
@@ -238,7 +238,7 @@ def generate_response(reflection, indicators_data):
             return get_ai_response(gemini_sub_model)
         else:
             logging.error(f"Gemini API 호출 중 오류 발생: {e}")
-            return "AI 답변 중 오류 발생"
+            return "An error occurred during AI response"
 
 def add_indicators(df):
     # 볼린저 밴드
@@ -547,14 +547,10 @@ def get_ai_response_to_json(response):
     response_json = response.to_dict()
 
     # JSON 데이터 추출
-    try:
-        text_content = response_json["candidates"][0]["content"]["parts"][0]["text"]
-        json_string = text_content.strip("```json\n").strip("```")
+    text_content = response_json["candidates"][0]["content"]["parts"][0]["text"]
+    json_string = text_content.strip("```json\n").strip("```")
 
-        return json.loads(json_string)
-    except Exception as e:
-        print(f"AI 응답 처리 오류 발생: {e}")
-        return {"decision": "hold", "percentage": 0, "reason": "AI response analysis failed - default to hold"}
+    return json.loads(json_string)
 
 def get_revenue_rate(balances, initial_investment):
     current_value = 0.0 
